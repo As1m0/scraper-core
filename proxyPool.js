@@ -4,7 +4,8 @@ const proxyQuarantine = require('./proxyQuarantine');
 // same process, since require() caches this module — same sharing behavior
 // the old global.failedProxies/global.usedProxies gave each repo, without
 // touching the global object.
-let failedProxies = [];
+// Seed from whatever the previous run in this same directory quarantined.
+let failedProxies = proxyQuarantine.load();
 let usedProxies = [];
 
 // ponytail: no lock around the read-then-write below, so two concurrent
