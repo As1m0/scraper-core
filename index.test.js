@@ -23,4 +23,7 @@ for (let i = 0; i < 10; i++) {
     assert.notStrictEqual(proxyPool.getRandomProxy(proxies), 'p1', 'quarantined proxy must not be selected');
 }
 
+const lastUsed = proxyPool.getLastUsedProxy();
+assert.strictEqual(proxyPool.popLastUsed(), lastUsed, 'popLastUsed must return the most recently used proxy');
+
 console.log('scraper-core self-check passed');
