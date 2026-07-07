@@ -59,8 +59,12 @@ function getLastUsedProxy() {
     return usedProxies[usedProxies.length - 1];
 }
 
+function popLastUsed() {
+    return usedProxies.pop();
+}
+
 function isFailed(proxy) {
     return failedProxies.includes(proxy);
 }
 
-module.exports = { getRandomProxy, quarantine, getLastUsedProxy, isFailed };
+module.exports = { getRandomProxy, quarantine, getLastUsedProxy, popLastUsed, isFailed };
