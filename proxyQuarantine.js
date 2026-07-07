@@ -1,8 +1,6 @@
 const fs = require('fs');
 const path = require('path');
 
-// ponytail: write-only log today (nothing reads it back on boot) — kept as-is
-// from the original per-repo copies; fixing that is a separate change.
 function save(failedProxies, filePath = path.join(process.cwd(), 'proxy-quarantine.json')) {
     try {
         fs.writeFileSync(filePath, JSON.stringify(failedProxies));
@@ -11,4 +9,13 @@ function save(failedProxies, filePath = path.join(process.cwd(), 'proxy-quaranti
     }
 }
 
-module.exports = { save };
+function load(filePath = path.join(process.cwd(), 'proxy-quarantine.json')) {
+    try {
+        const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+        return Array.isArray(parsed) ? parsed : [];
+    } catch (err) {
+        return [];
+    }
+}
+
+module.exports = { save, load };

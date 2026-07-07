@@ -1,6 +1,18 @@
 const assert = require('assert');
+const os = require('os');
+const path = require('path');
+const fs = require('fs');
 const { isProxyError, shouldRestartBrowser } = require('./errorClassification');
+const proxyQuarantine = require('./proxyQuarantine');
 const proxyPool = require('./proxyPool');
+
+// proxyQuarantine: save/load round trip (what seeds proxyPool's in-memory
+// list on the next process boot in the same directory)
+const tmpFile = path.join(os.tmpdir(), `proxy-quarantine-test-${process.pid}.json`);
+assert.deepStrictEqual(proxyQuarantine.load(tmpFile), [], 'load must return [] when the file does not exist');
+proxyQuarantine.save(['1.2.3.4'], tmpFile);
+assert.deepStrictEqual(proxyQuarantine.load(tmpFile), ['1.2.3.4'], 'load must return what save wrote');
+fs.unlinkSync(tmpFile);
 
 // errorClassification
 assert.strictEqual(isProxyError(new Error('net::ERR_TUNNEL_CONNECTION_FAILED')), true);
