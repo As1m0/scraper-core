@@ -2,6 +2,7 @@ const fs = require('fs');
 const { USER_AGENTS } = require('./userAgents');
 const proxyPool = require('./proxyPool');
 const { isProxyError, shouldRestartBrowser } = require('./errorClassification');
+const api = require('./api');
 
 // Shared browser-scraper base class. Holds only the methods verified identical
 // across the OOS/CONTENT/SEARCH scrapers; browser launch and the run() loop
@@ -28,9 +29,12 @@ class BaseScraper {
         this.minWaitMs = options.minWaitMs ?? 2000;
         this.maxWaitMs = options.maxWaitMs ?? 5000;
 
-        // Each repo injects its own api.js functions.
-        this.sendScrapeSummary = options.sendScrapeSummary ?? null;
-        this.listProxies = options.listProxies ?? null;
+        // Backend API functions: repos may inject their own, otherwise the
+        // shared implementations are used. summaryEndpoint names the per-repo
+        // scrape-summary path (e.g. '/scrapesummary/scrape-summary-oos').
+        this.listProxies = options.listProxies ?? api.listProxies;
+        this.sendScrapeSummary = options.sendScrapeSummary
+            ?? (options.summaryEndpoint ? (data) => api.sendScrapeSummary(data, options.summaryEndpoint) : null);
     }
 
     logPrefix(level) {
@@ -56,10 +60,6 @@ class BaseScraper {
         this.log(`🛒 Initializing scraper for shopId ${this.shopId}`);
 
         if (this.useProxy) {
-            if (!this.listProxies) {
-                throw new Error('useProxy is enabled but no listProxies function was injected');
-            }
-
             this.proxies = await this.listProxies();
             if (!this.proxies?.length) throw new Error('No proxies retrieved from API.');
 

@@ -101,5 +101,16 @@ assert.throws(() => scraper.throwIfStopRequested(), /test stop/, 'throwIfStopReq
     ps.log('hello');
     assert.strictEqual(prefixLogs[0], '[X][INFO] hello', 'log must use the logPrefix hook');
 
+    // summaryEndpoint option wires the shared sendScrapeSummary
+    const epScraper = new TestScraper(7, { scraperName: 'Ep', summaryEndpoint: '/scrapesummary/x' });
+    assert.strictEqual(typeof epScraper.sendScrapeSummary, 'function', 'summaryEndpoint must produce a sender');
+    assert.strictEqual(typeof epScraper.listProxies, 'function', 'listProxies must default to the shared implementation');
+
+    // getBaseApiUrl: env override wins
+    const { getBaseApiUrl } = require('./api');
+    process.env.API_BASE_URL = 'http://example.test/api';
+    assert.strictEqual(getBaseApiUrl(), 'http://example.test/api', 'API_BASE_URL env must override the default');
+    delete process.env.API_BASE_URL;
+
     console.log('scraper-core self-check passed');
 })();
