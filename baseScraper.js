@@ -27,6 +27,9 @@ class BaseScraper {
         // Bounds for getRandomWaitTime(); each repo passes its own defaults.
         this.minWaitMs = options.minWaitMs ?? 2000;
         this.maxWaitMs = options.maxWaitMs ?? 5000;
+
+        // Each repo injects its own api.js sendScrapeSummary function.
+        this.sendScrapeSummary = options.sendScrapeSummary ?? null;
     }
 
     async detectChallengePage(page) {
@@ -189,6 +192,28 @@ class BaseScraper {
 
     shouldRestartBrowser(err) {
         return shouldRestartBrowser(err, this.extraRestartPatterns);
+    }
+
+    // Send summary to API
+    async sendSummary() {
+        try {
+            if (!this.sendScrapeSummary) {
+                this.log('⚠️ No sendScrapeSummary function injected; skipping summary send', 'WARN');
+                return;
+            }
+
+            const summaryData = this.summary.getSummary();
+            const result = await this.sendScrapeSummary(summaryData);
+
+            if (result.success) {
+                this.log('📊 Summary sent to API successfully');
+            } else {
+                this.log(`⚠️ Failed to send summary to API: ${result.error}`, 'WARN');
+            }
+        } catch (error) {
+            this.log(`⚠️ Error sending summary: ${error.message}`, 'WARN');
+            // Don't throw - summary failure shouldn't stop the scraper
+        }
     }
 }
 

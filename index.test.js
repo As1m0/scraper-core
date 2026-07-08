@@ -64,4 +64,20 @@ assert.strictEqual(scraper.clearedProxy, 'p9', 'onProxyQuarantined hook must fir
 scraper.requestStop('test stop');
 assert.throws(() => scraper.throwIfStopRequested(), /test stop/, 'throwIfStopRequested must throw the stop reason');
 
-console.log('scraper-core self-check passed');
+// sendSummary: uses the injected sender; no-throw + warn when none injected
+(async () => {
+    let sent = null;
+    const sender = new TestScraper(2, {
+        scraperName: 'Sender',
+        sendScrapeSummary: async (data) => { sent = data; return { success: true }; },
+    });
+    sender.summary = { getSummary: () => ({ ok: 1 }) };
+    await sender.sendSummary();
+    assert.deepStrictEqual(sent, { ok: 1 }, 'sendSummary must post summary via the injected function');
+
+    const noSender = new TestScraper(3, { scraperName: 'NoSender' });
+    noSender.summary = { getSummary: () => ({}) };
+    await noSender.sendSummary(); // must not throw
+
+    console.log('scraper-core self-check passed');
+})();
