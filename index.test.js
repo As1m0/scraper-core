@@ -112,5 +112,52 @@ assert.throws(() => scraper.throwIfStopRequested(), /test stop/, 'throwIfStopReq
     assert.strictEqual(getBaseApiUrl(), 'http://example.test/api', 'API_BASE_URL env must override the default');
     delete process.env.API_BASE_URL;
 
+    // ScrapeSummaryBase: envelope + hooks drive getSummary/getTextSummary
+    const { ScrapeSummaryBase } = require('./scrapeSummaryBase');
+    class TestSummary extends ScrapeSummaryBase {
+        constructor(name, shopId) {
+            super(name, shopId);
+            this.totalProductsProcessed = 0;
+            this.totalProductsFailed = 0;
+        }
+        addProductResults(processed, failed) {
+            this.totalProductsProcessed += processed;
+            this.totalProductsFailed += failed;
+        }
+        getCounters() {
+            return { total_products_processed: this.totalProductsProcessed, total_products_failed: this.totalProductsFailed };
+        }
+        getStatsLines() { return [`Products Processed: ${this.totalProductsProcessed}`]; }
+        getIssueLines() { return [`Failed Products: ${this.totalProductsFailed}`]; }
+    }
+    const summary = new TestSummary('T', 1);
+    summary.start();
+    summary.addProductResults(10, 1);
+    summary.addRetry();
+    summary.addError('boom');
+    summary.addNote('n');
+    summary.end();
+    const data = summary.getSummary();
+    assert.strictEqual(data.scraper_name, 'T');
+    assert.strictEqual(data.shop_id, 1);
+    assert.strictEqual(data.total_products_processed, 10, 'getCounters fields must appear in getSummary');
+    assert.strictEqual(data.total_retries, 1);
+    assert.strictEqual(data.success_rate, '90.00', 'default successRateInputs must use products processed/failed');
+    assert.strictEqual(data.errors.length, 1);
+    assert.strictEqual(data.notes.length, 1);
+    assert.deepStrictEqual(
+        Object.keys(data).slice(0, 5),
+        ['scraper_name', 'shop_id', 'start_time', 'end_time', 'duration_seconds'],
+        'envelope fields must precede counters');
+    const empty = new TestSummary('E', 2);
+    assert.strictEqual(empty.calculateSuccessRate(), 0, 'zero processed must yield 0, not NaN');
+    summary.duration = 3723;
+    assert.strictEqual(summary.formatDuration(), '1h 2m 3s');
+    const text = summary.getTextSummary();
+    assert.ok(text.includes('  • Products Processed: 10'), 'stats hook lines must render');
+    assert.ok(text.includes('  • Success Rate: 90.00%'), 'success rate must be appended to stats');
+    assert.ok(text.includes('  • Failed Products: 1'), 'issue hook lines must render');
+    assert.ok(text.includes('  • Total Retries: 1') && text.includes('  • Errors Logged: 1'), 'shared issue lines must be appended');
+
     console.log('scraper-core self-check passed');
 })();
