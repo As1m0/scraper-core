@@ -79,5 +79,27 @@ assert.throws(() => scraper.throwIfStopRequested(), /test stop/, 'throwIfStopReq
     noSender.summary = { getSummary: () => ({}) };
     await noSender.sendSummary(); // must not throw
 
+    // init: uses the injected listProxies, builds host:port list, skips when useProxy is false
+    const initScraper = new TestScraper(4, {
+        scraperName: 'Init',
+        listProxies: async () => [{ proxy_address: '1.1.1.1', port: 80 }, { bad: true }],
+    });
+    await initScraper.init();
+    assert.deepStrictEqual(initScraper.proxyList, ['1.1.1.1:80'], 'init must build host:port list from valid entries');
+
+    const noProxyScraper = new TestScraper(5, { scraperName: 'NoProxy', useProxy: false });
+    await noProxyScraper.init(); // must not throw despite no listProxies injected
+    assert.deepStrictEqual(noProxyScraper.proxyList, [], 'init with useProxy:false must skip the proxy fetch');
+
+    // log/logPrefix: prefix override applies
+    class PrefixScraper extends BaseScraper {
+        logPrefix(level) { return `[X][${level}]`; }
+    }
+    const prefixLogs = [];
+    const ps = new PrefixScraper(6, { scraperName: 'P' });
+    ps.logCallback = (m) => prefixLogs.push(m);
+    ps.log('hello');
+    assert.strictEqual(prefixLogs[0], '[X][INFO] hello', 'log must use the logPrefix hook');
+
     console.log('scraper-core self-check passed');
 })();

@@ -28,8 +28,47 @@ class BaseScraper {
         this.minWaitMs = options.minWaitMs ?? 2000;
         this.maxWaitMs = options.maxWaitMs ?? 5000;
 
-        // Each repo injects its own api.js sendScrapeSummary function.
+        // Each repo injects its own api.js functions.
         this.sendScrapeSummary = options.sendScrapeSummary ?? null;
+        this.listProxies = options.listProxies ?? null;
+    }
+
+    logPrefix(level) {
+        return `[${this.scraperName}][${level}]`;
+    }
+
+    log(message, level = 'INFO') {
+        try {
+            const logMessage = `${this.logPrefix(level)} ${message}`;
+
+            if (this.logCallback) {
+                this.logCallback(logMessage);
+            } else {
+                console.log(logMessage);
+            }
+        } catch (logErr) {
+            console.error('Error in log method:', logErr.message);
+            console.log(message); // Fallback
+        }
+    }
+
+    async init() {
+        this.log(`🛒 Initializing scraper for shopId ${this.shopId}`);
+
+        if (this.useProxy) {
+            if (!this.listProxies) {
+                throw new Error('useProxy is enabled but no listProxies function was injected');
+            }
+
+            this.proxies = await this.listProxies();
+            if (!this.proxies?.length) throw new Error('No proxies retrieved from API.');
+
+            this.proxyList = this.proxies
+                .filter(p => p?.proxy_address && p?.port)
+                .map(p => `${p.proxy_address}:${p.port}`);
+
+            this.log(`Fetched ${this.proxyList.length} proxies.`);
+        }
     }
 
     async detectChallengePage(page) {
