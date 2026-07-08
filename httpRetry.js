@@ -1,4 +1,8 @@
-const fetch = (...args) => import('node-fetch').then(({ default: nodeFetch }) => nodeFetch(...args));
+// Node 18+ ships a global fetch; fall back to node-fetch only on older
+// runtimes (consumers no longer need node-fetch as a dependency).
+const fetch = globalThis.fetch
+    ? (...args) => globalThis.fetch(...args)
+    : (...args) => import('node-fetch').then(({ default: nodeFetch }) => nodeFetch(...args));
 
 const DEFAULT_RETRYABLE_STATUS_CODES = new Set([429, 500, 502, 503, 504]);
 
