@@ -38,4 +38,30 @@ for (let i = 0; i < 10; i++) {
 const lastUsed = proxyPool.getLastUsedProxy();
 assert.strictEqual(proxyPool.popLastUsed(), lastUsed, 'popLastUsed must return the most recently used proxy');
 
+// BaseScraper: constructor defaults, per-repo overrides, quarantine hook
+const { BaseScraper } = require('./baseScraper');
+const logs = [];
+class TestScraper extends BaseScraper {
+    log(message, level = 'INFO') { logs.push(message); }
+    onProxyQuarantined(proxy) { this.clearedProxy = proxy; }
+}
+const scraper = new TestScraper(1, {
+    scraperName: 'Test',
+    extraRestartPatterns: ['My custom failure'],
+    minWaitMs: 100,
+    maxWaitMs: 200,
+});
+assert.strictEqual(scraper.useProxy, true, 'useProxy must default to true');
+assert.strictEqual(scraper.shouldRestartBrowser(new Error('Target closed')), true, 'shared restart patterns must apply');
+assert.strictEqual(scraper.shouldRestartBrowser(new Error('My custom failure')), true, 'extraRestartPatterns must layer on top');
+assert.strictEqual(scraper.shouldRestartBrowser(new Error('fine')), false);
+const wait = scraper.getRandomWaitTime();
+assert.ok(wait >= 100 && wait <= 200, 'getRandomWaitTime must respect constructor bounds');
+scraper.currentProxy = 'p9';
+scraper.quarantineCurrentProxy('test');
+assert.strictEqual(proxyPool.isFailed('p9'), true, 'quarantineCurrentProxy must quarantine the current proxy');
+assert.strictEqual(scraper.clearedProxy, 'p9', 'onProxyQuarantined hook must fire with the quarantined proxy');
+scraper.requestStop('test stop');
+assert.throws(() => scraper.throwIfStopRequested(), /test stop/, 'throwIfStopRequested must throw the stop reason');
+
 console.log('scraper-core self-check passed');
