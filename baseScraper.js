@@ -5,9 +5,17 @@ const { isProxyError, shouldRestartBrowser } = require('./errorClassification');
 const api = require('./api');
 
 // Shared browser-scraper base class. Holds only the methods verified identical
-// across the OOS/CONTENT/SEARCH scrapers; browser launch and the run() loop
-// stay in each consuming repo. Subclasses must provide log() and construct
-// their own ScrapeSummary (metrics differ per scraper type).
+// across the OOS/CONTENT/SEARCH scrapers; the run() loop stays in each
+// consuming repo. Subclasses must provide log() and construct their own
+// ScrapeSummary (metrics differ per scraper type).
+//
+// setupPage()/getBrowserArgs()/shouldBlockRequest()/getExtraHeaders()/cleanup()
+// match CONTENT/OOS's browser setup exactly (proven byte-identical). The
+// puppeteer.launch() call itself stays per-repo — core never requires
+// puppeteer, it only operates on the browser/page objects handed to it, so
+// consumers keep sole ownership of that dependency and its Chromium binary.
+// SEARCH's setup diverges (anti-detection script, no disconnected handler,
+// @sparticuz/chromium) and keeps its own full override; it does not use these.
 class BaseScraper {
     constructor(shopId, options = {}) {
         this.shopId = shopId;
@@ -231,6 +239,121 @@ class BaseScraper {
 
     shouldRestartBrowser(err) {
         return shouldRestartBrowser(err, this.extraRestartPatterns);
+    }
+
+    // Default Chromium launch args; override to add/remove flags (e.g. OOS's
+    // --disable-images/-extensions/-plugins).
+    getBrowserArgs(proxyServer) {
+        return [
+            this.useProxy ? `--proxy-server=${proxyServer}` : '',
+            '--lang=hu-HU,hu',
+            '--no-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-setuid-sandbox',
+            '--disable-gpu',
+            '--single-process',
+            '--no-zygote'
+        ];
+    }
+
+    // Default request-blocking policy; override to add per-repo rules.
+    shouldBlockRequest(req) {
+        const url = req.url();
+        const resourceType = req.resourceType();
+
+        return (
+            url.includes('cloudflareinsights') ||
+            url.includes('speedcurve') ||
+            url.includes('googletagmanager') ||
+            url.includes('google-analytics') ||
+            url.includes('facebook.com/tr') ||
+            (resourceType === 'media') ||
+            url.includes('/ads/') ||
+            url.includes('doubleclick')
+        );
+    }
+
+    // Default outbound headers; override to change per-repo.
+    getExtraHeaders() {
+        return {
+            'Accept-Language': 'hu-HU,hu;q=0.9,en;q=0.8',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Connection': 'keep-alive',
+            'Keep-Alive': 'timeout=60, max=1000'
+        };
+    }
+
+    // Wires a freshly-launched browser's page: error/disconnected handlers,
+    // request interception via shouldBlockRequest(), proxy auth, timezone,
+    // UA/viewport randomization, headers, and debug console logging. Callers
+    // do `const page = await this.setupPage(browser);` after puppeteer.launch().
+    async setupPage(browser) {
+        const page = await browser.newPage();
+
+        page.on('error', (err) => {
+            this.log(`⚠️ Page error event: ${err.message}`, 'WARN');
+        });
+
+        browser.on('disconnected', () => {
+            if (!this.intentionalBrowserClose) {
+                this.log('⚠️ Browser CDP connection lost unexpectedly', 'WARN');
+                this.browserDisconnected = true;
+            }
+        });
+
+        if (!this.debug) {
+            await page.setRequestInterception(true);
+            page.on('request', (req) => {
+                try {
+                    if (this.shouldBlockRequest(req)) {
+                        req.abort();
+                    } else {
+                        req.continue();
+                    }
+                } catch (err) {
+                    try {
+                        req.continue();
+                    } catch (continueErr) {
+                        this.log(`Request handling error: ${err.message}`, 'WARN');
+                    }
+                }
+            });
+        }
+
+        if (this.useProxy) {
+            const selectedProxy = this.proxies.find(
+                p => `${p.proxy_address}:${p.port}` === this.currentProxy
+            ) || this.proxies[0];
+
+            await page.authenticate({
+                username: selectedProxy.username,
+                password: selectedProxy.password
+            });
+        }
+
+        await page.emulateTimezone('Europe/Budapest');
+
+        const userAgent = this.getRandomUserAgent();
+        await page.setUserAgent(userAgent);
+        await page.setViewport({
+            width: 1200 + Math.floor(Math.random() * 200),
+            height: 700 + Math.floor(Math.random() * 100)
+        });
+
+        await page.setExtraHTTPHeaders(this.getExtraHeaders());
+
+        if (this.debug) {
+            page.on('console', msg => {
+                this.log(`🖥️ Browser console message: ${msg.text()}`);
+            });
+        }
+
+        return page;
+    }
+
+    // Default cleanup hook the run() loop calls between/after browsers.
+    async cleanup() {
+        return this.cleanupFolder();
     }
 
     // Send summary to API

@@ -159,5 +159,77 @@ assert.throws(() => scraper.throwIfStopRequested(), /test stop/, 'throwIfStopReq
     assert.ok(text.includes('  • Failed Products: 1'), 'issue hook lines must render');
     assert.ok(text.includes('  • Total Retries: 1') && text.includes('  • Errors Logged: 1'), 'shared issue lines must be appended');
 
+    // createScraperServer: /health is open, /run-scrapers requires the key
+    const { createScraperServer } = require('./server');
+    process.env.SCRAPER_INBOUND_KEY = 'test-key';
+    process.env.NODE_ENV = 'production'; // avoid the localhost auth-bypass path
+    delete process.env.RESTART_APP;
+
+    const httpInstance = createScraperServer({
+        port: 0,
+        buildTasks: async () => [],
+        shopToScraperKey: { 1: 'fake' },
+    });
+    await new Promise(resolve => httpInstance.server.once('listening', resolve));
+    const httpPort = httpInstance.server.address().port;
+    const base = `http://127.0.0.1:${httpPort}`;
+
+    const healthRes = await fetch(`${base}/health`);
+    assert.strictEqual(healthRes.status, 200, '/health must be open without auth');
+
+    const unauthedRes = await fetch(`${base}/run-scrapers?run=fake`);
+    assert.strictEqual(unauthedRes.status, 401, '/run-scrapers must reject a missing key');
+
+    // runScrapers mutex: a second call while the first is in flight is skipped,
+    // not run concurrently (2026-07-08 operational fix)
+    let releaseGate;
+    const gate = new Promise(resolve => { releaseGate = resolve; });
+    let runCount = 0;
+    const gatedScraper = {
+        shopId: 1,
+        requestStop() {},
+        async run() { runCount++; await gate; return 'ok'; }
+    };
+    const mutexLogs = [];
+    const firstRun = httpInstance.runScrapers([{ scraper: gatedScraper, name: 'Gated' }], 1, (m) => mutexLogs.push(m));
+    await new Promise(resolve => setTimeout(resolve, 50));
+    const secondLogs = [];
+    await httpInstance.runScrapers([{ scraper: gatedScraper, name: 'Gated2' }], 1, (m) => secondLogs.push(m));
+    assert.ok(secondLogs.some(m => m.includes('already in progress')), 'concurrent runScrapers call must be rejected by the mutex');
+    releaseGate();
+    await firstRun;
+    assert.strictEqual(runCount, 1, 'exactly one task run must have started under the mutex');
+
+    await new Promise(resolve => httpInstance.server.close(resolve));
+
+    // Task timeout: requestStop() fires and the worker doesn't hang past the
+    // stopped run settling (2026-07-08 operational fix)
+    const timeoutInstance = createScraperServer({
+        port: 0,
+        buildTasks: async () => [],
+        shopToScraperKey: { 1: 'fake' },
+        taskTimeoutMs: 100,
+    });
+    await new Promise(resolve => timeoutInstance.server.once('listening', resolve));
+
+    const hangingScraper = {
+        shopId: 2,
+        stopRequested: false,
+        stopReason: null,
+        requestStop(reason) { this.stopRequested = true; this.stopReason = reason; },
+        async run() {
+            while (!this.stopRequested) {
+                await new Promise(resolve => setTimeout(resolve, 20));
+            }
+            throw new Error(this.stopReason);
+        }
+    };
+    const timeoutLogs = [];
+    await timeoutInstance.runScrapers([{ scraper: hangingScraper, name: 'Hanging' }], 1, (m) => timeoutLogs.push(m));
+    assert.strictEqual(hangingScraper.stopRequested, true, 'requestStop must fire when a task exceeds taskTimeoutMs');
+    assert.ok(timeoutLogs.some(m => m.includes('Task timeout after')), 'timeout must be logged');
+
+    await new Promise(resolve => timeoutInstance.server.close(resolve));
+
     console.log('scraper-core self-check passed');
 })();

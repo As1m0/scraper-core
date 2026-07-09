@@ -5,11 +5,13 @@ const { isProxyError, shouldRestartBrowser, PROXY_ERROR_PATTERNS, BROWSER_RESTAR
 const { requestWithRetry, DEFAULT_RETRYABLE_STATUS_CODES } = require('./httpRetry');
 const { BaseScraper } = require('./baseScraper');
 const { ScrapeSummaryBase } = require('./scrapeSummaryBase');
+const { createScraperServer } = require('./server');
 const { getBaseApiUrl, listProxies, sendScrapeSummary } = require('./api');
 
 module.exports = {
     BaseScraper,
     ScrapeSummaryBase,
+    createScraperServer,
     getBaseApiUrl,
     listProxies,
     sendScrapeSummary,
