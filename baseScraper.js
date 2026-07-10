@@ -16,6 +16,13 @@ const api = require('./api');
 // consumers keep sole ownership of that dependency and its Chromium binary.
 // SEARCH's setup diverges (anti-detection script, no disconnected handler,
 // @sparticuz/chromium) and keeps its own full override; it does not use these.
+//
+// openBrowserWithRecovery() retries the initial pre-loop launch (proxy
+// quarantine + backoff + final no-proxy fallback). Only CONTENT calls it
+// today. SEARCH does not use it and should not: its own run() loop already
+// wraps proxy-selection + openBrowser() + the scrape as one retryable unit
+// with sticky-proxy semantics, so layering this underneath would nest two
+// retry loops and add a no-proxy fallback SEARCH's design doesn't have.
 class BaseScraper {
     constructor(shopId, options = {}) {
         this.shopId = shopId;
@@ -349,6 +356,87 @@ class BaseScraper {
         }
 
         return page;
+    }
+
+    // Retries the initial browser launch (before any product/keyword loop
+    // starts) up to maxAttempts times: quarantines the proxy on a timeout-like
+    // or proxy-classified failure, closes any partial page/browser, cleans up,
+    // and backs off 1500ms * attempt between tries. The final attempt disables
+    // useProxy entirely as a last resort. Depends only on this.openBrowser()
+    // (per-repo override) and already-shared primitives, so it's launch-only —
+    // no product/batch state coupling.
+    async openBrowserWithRecovery(preferredProxy = null, maxAttempts = 3) {
+        let lastError;
+
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            this.throwIfStopRequested();
+
+            const isFinalAttempt = attempt === maxAttempts;
+            const disableProxyForFinalAttempt = this.useProxy && isFinalAttempt;
+            const proxyForAttempt = attempt === 1 ? preferredProxy : null;
+
+            if (disableProxyForFinalAttempt) {
+                this.log('🔄 Final browser launch attempt without proxy...', 'WARN');
+                this.useProxy = false;
+            }
+
+            try {
+                const result = await this.openBrowser(proxyForAttempt);
+                this.intentionalBrowserClose = false;
+                this.browserDisconnected = false;
+                return result;
+            } catch (err) {
+                lastError = err;
+                const message = err?.message || '';
+                const timeoutLikeError = /timed out|timeout/i.test(message);
+
+                if (this.currentProxy && (timeoutLikeError || this.isProxyError(err))) {
+                    this.quarantineCurrentProxy(timeoutLikeError ? 'browser launch timeout' : 'browser launch connection error');
+                    proxyPool.popLastUsed();
+                }
+
+                this.log(`⚠️ Browser launch attempt ${attempt}/${maxAttempts} failed: ${message}`, 'WARN');
+
+                this.intentionalBrowserClose = true;
+                try {
+                    if (this.activePage && !this.activePage.isClosed()) {
+                        await this.activePage.removeAllListeners();
+                        await this.activePage.close();
+                    }
+                } catch (pageErr) {
+                    this.log(`⚠️ Failed to close page after launch error: ${pageErr.message}`, 'WARN');
+                }
+
+                try {
+                    if (this.activeBrowser && this.activeBrowser.connected) {
+                        await Promise.race([
+                            this.activeBrowser.close(),
+                            new Promise((_, reject) =>
+                                setTimeout(() => reject(new Error('Browser close timeout')), 5000)
+                            )
+                        ]);
+                    }
+                } catch (closeErr) {
+                    this.log(`⚠️ Failed to close browser after launch error: ${closeErr.message}`, 'WARN');
+                }
+
+                this.activeBrowser = null;
+                this.activePage = null;
+                await this.cleanup();
+                this.intentionalBrowserClose = false;
+                this.browserDisconnected = false;
+
+                if (!isFinalAttempt) {
+                    await new Promise(res => setTimeout(res, 1500 * attempt));
+                }
+            } finally {
+                if (disableProxyForFinalAttempt) {
+                    this.useProxy = true;
+                }
+            }
+        }
+
+        throw lastError || new Error('Browser launch failed after retries');
     }
 
     // Default cleanup hook the run() loop calls between/after browsers.

@@ -112,6 +112,50 @@ assert.throws(() => scraper.throwIfStopRequested(), /test stop/, 'throwIfStopReq
     assert.strictEqual(getBaseApiUrl(), 'http://example.test/api', 'API_BASE_URL env must override the default');
     delete process.env.API_BASE_URL;
 
+    // openBrowserWithRecovery: retries the initial launch, quarantines on
+    // timeout-like/proxy failures, falls back to no-proxy on the final attempt
+    class RecoveryTestScraper extends BaseScraper {
+        log() {} // silence
+        constructor(shopId, options, launchScript) {
+            super(shopId, options);
+            this.launchScript = launchScript; // queue of 'ok' | Error
+            this.launchAttempts = [];
+        }
+        async openBrowser(preferredProxy) {
+            this.currentProxy = preferredProxy || 'rotated-proxy';
+            this.launchAttempts.push({ preferredProxy, useProxy: this.useProxy });
+            const outcome = this.launchScript.shift();
+            if (outcome instanceof Error) throw outcome;
+            this.activeBrowser = { close: async () => {}, connected: true };
+            this.activePage = { isClosed: () => false, removeAllListeners: async () => {}, close: async () => {} };
+            return { browser: this.activeBrowser, page: this.activePage };
+        }
+    }
+
+    // first attempt succeeds: no retry, no sleep
+    const rec1 = new RecoveryTestScraper(10, { scraperName: 'Rec1' }, ['ok']);
+    const result1 = await rec1.openBrowserWithRecovery('p1', 3);
+    assert.strictEqual(rec1.launchAttempts.length, 1, 'must not retry when the first attempt succeeds');
+    assert.strictEqual(rec1.launchAttempts[0].preferredProxy, 'p1', 'must use the preferred proxy on the first attempt');
+    assert.ok(result1.browser && result1.page, 'must return the browser/page pair');
+
+    // timeout-like failure quarantines the proxy, then the retry succeeds
+    const rec2 = new RecoveryTestScraper(11, { scraperName: 'Rec2' }, [new Error('Navigation timed out'), 'ok']);
+    await rec2.openBrowserWithRecovery('p2', 2);
+    assert.strictEqual(rec2.launchAttempts.length, 2, 'must retry once after a timeout-like failure');
+    assert.strictEqual(proxyPool.isFailed('p2'), true, 'a timeout-like launch failure must quarantine the proxy');
+
+    // all attempts fail except the final no-proxy fallback
+    const rec3 = new RecoveryTestScraper(12, { scraperName: 'Rec3' }, [new Error('net::ERR_TUNNEL_CONNECTION_FAILED'), 'ok']);
+    await rec3.openBrowserWithRecovery('p3', 2);
+    assert.strictEqual(rec3.launchAttempts[1].preferredProxy, null, 'the final attempt must drop the preferred proxy');
+    assert.strictEqual(rec3.useProxy, true, 'useProxy must be restored to true after the no-proxy fallback attempt');
+
+    // every attempt fails: throws the last error
+    const rec4 = new RecoveryTestScraper(13, { scraperName: 'Rec4' }, [new Error('boom 1'), new Error('boom 2')]);
+    await assert.rejects(() => rec4.openBrowserWithRecovery('p4', 2), /boom 2/, 'must throw the last error once every attempt is exhausted');
+    assert.strictEqual(rec4.launchAttempts.length, 2, 'must have attempted exactly maxAttempts times');
+
     // ScrapeSummaryBase: envelope + hooks drive getSummary/getTextSummary
     const { ScrapeSummaryBase } = require('./scrapeSummaryBase');
     class TestSummary extends ScrapeSummaryBase {
