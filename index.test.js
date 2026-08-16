@@ -159,8 +159,7 @@ assert.throws(() => scraper.throwIfStopRequested(), /test stop/, 'throwIfStopReq
     // ScrapeSummaryBase: envelope + hooks drive getSummary/getTextSummary
     const { ScrapeSummaryBase } = require('./scrapeSummaryBase');
     class TestSummary extends ScrapeSummaryBase {
-        constructor(name, shopId) {
-            super(name, shopId);
+        resetCounters() {
             this.totalProductsProcessed = 0;
             this.totalProductsFailed = 0;
         }
@@ -202,6 +201,29 @@ assert.throws(() => scraper.throwIfStopRequested(), /test stop/, 'throwIfStopReq
     assert.ok(text.includes('  • Success Rate: 90.00%'), 'success rate must be appended to stats');
     assert.ok(text.includes('  • Failed Products: 1'), 'issue hook lines must render');
     assert.ok(text.includes('  • Total Retries: 1') && text.includes('  • Errors Logged: 1'), 'shared issue lines must be appended');
+
+    // reset()/start() must zero counters/errors/notes/retries - scraper instances are
+    // reused across cron ticks/HTTP triggers in some repos, so a second run() on the
+    // same instance must not inherit the previous run's data (this was the bug: a
+    // failed second run could report the first run's nonzero total_products_processed)
+    const reused = new TestSummary('Reused', 3);
+    reused.start();
+    reused.addProductResults(10, 1);
+    reused.addRetry();
+    reused.addError('first run error');
+    reused.addNote('first run note');
+    reused.end();
+    assert.strictEqual(reused.getSummary().total_products_processed, 10, 'first run must record its data');
+
+    reused.start(); // simulates a second run() on the same reused instance
+    assert.strictEqual(reused.totalProductsProcessed, 0, 'counters must reset on reuse');
+    assert.strictEqual(reused.totalProductsFailed, 0, 'counters must reset on reuse');
+    assert.strictEqual(reused.errors.length, 0, 'errors must reset on reuse');
+    assert.strictEqual(reused.notes.length, 0, 'notes must reset on reuse');
+    assert.strictEqual(reused.totalRetries, 0, 'retries must reset on reuse');
+    assert.strictEqual(reused.endTime, null, 'endTime must reset on reuse');
+    const secondRunData = reused.getSummary();
+    assert.strictEqual(secondRunData.total_products_processed, 0, 'a failed second run must report 0, not the first run\'s count');
 
     // createScraperServer: /health is open, /run-scrapers requires the key
     const { createScraperServer } = require('./server');

@@ -12,26 +12,34 @@
 //                           (Total Retries / Errors Logged are appended)
 //   successRateInputs()  -> { total, failed } for calculateSuccessRate();
 //                           defaults to products processed/failed
+//   resetCounters()      -> zero subclass counters; called by reset()/start()
+//                           so a reused instance starts each run() clean
 class ScrapeSummaryBase {
     constructor(scraperName, shopId) {
         this.scraperName = scraperName;
         this.shopId = shopId;
+        this.maxErrorsToStore = 100;
+        this.reset();
+    }
+
+    // Zeroes every mutable per-run field, including subclass counters via
+    // resetCounters(). Called by the constructor and by start() - scraper
+    // instances are reused across cron ticks/HTTP triggers (module-level
+    // singletons in some repos), so a run() that never gets a fresh instance
+    // must still start with a genuinely empty summary, not the previous run's.
+    reset() {
         this.startTime = new Date();
         this.endTime = null;
         this.duration = null;
         this.totalRetries = 0;
-
-        // Error tracking
         this.errors = [];
-        this.maxErrorsToStore = 100;
-
-        // Notes and additional info
         this.notes = [];
+        this.resetCounters();
     }
 
     // Mark the start of scraping
     start() {
-        this.startTime = new Date();
+        this.reset();
     }
 
     // Mark the end of scraping
@@ -68,6 +76,9 @@ class ScrapeSummaryBase {
     getCounters() {
         return {};
     }
+
+    // Zero subclass-specific counters; called by reset(). Override alongside getCounters().
+    resetCounters() {}
 
     getStatsLines() {
         return [];
