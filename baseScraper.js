@@ -194,7 +194,7 @@ class BaseScraper {
         const browser = this.activeBrowser;
         if (browser) {
             this.intentionalBrowserClose = true;
-            Promise.resolve(browser.close()).catch((err) => {
+            closeBrowserHard(browser).catch((err) => {
                 this.log(`⚠️ Failed to close browser during stop: ${err.message}`, 'WARN');
             });
         }
@@ -408,14 +408,7 @@ class BaseScraper {
                 }
 
                 try {
-                    if (this.activeBrowser && this.activeBrowser.connected) {
-                        await Promise.race([
-                            this.activeBrowser.close(),
-                            new Promise((_, reject) =>
-                                setTimeout(() => reject(new Error('Browser close timeout')), 5000)
-                            )
-                        ]);
-                    }
+                    await closeBrowserHard(this.activeBrowser);
                 } catch (closeErr) {
                     this.log(`⚠️ Failed to close browser after launch error: ${closeErr.message}`, 'WARN');
                 }
@@ -467,4 +460,33 @@ class BaseScraper {
     }
 }
 
-module.exports = { BaseScraper };
+/**
+ * Closes a Puppeteer browser and makes sure its Chromium process is gone. close() can't reach a disconnected
+ * browser and is abandoned after timeoutMs on a hung one; either way the process would keep running, and enough
+ * of those exhaust the container until the next spawn fails (EAGAIN). Still throws on a failed/timed-out close,
+ * so callers keep their own warning.
+ */
+async function closeBrowserHard(browser, timeoutMs = 5000) {
+    if (!browser) {
+        return;
+    }
+    const browserProcess = browser.process?.();
+    let timer;
+    try {
+        if (browser.connected) {
+            await Promise.race([
+                browser.close(),
+                new Promise((_, reject) => {
+                    timer = setTimeout(() => reject(new Error('Browser close timeout')), timeoutMs);
+                }),
+            ]);
+        }
+    } finally {
+        clearTimeout(timer);
+        if (browserProcess && browserProcess.exitCode === null && browserProcess.signalCode === null) {
+            browserProcess.kill('SIGKILL');
+        }
+    }
+}
+
+module.exports = { BaseScraper, closeBrowserHard };

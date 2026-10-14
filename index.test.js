@@ -301,5 +301,30 @@ assert.throws(() => scraper.throwIfStopRequested(), /test stop/, 'throwIfStopReq
 
     await new Promise(resolve => timeoutInstance.server.close(resolve));
 
+    // closeBrowserHard: whatever close() does, the browser process must not outlive it (a real child process
+    // stands in for Chromium; core never requires puppeteer)
+    const { closeBrowserHard } = require('./baseScraper');
+    const { spawn } = require('child_process');
+    const exited = (proc) => new Promise(resolve => proc.exitCode !== null || proc.signalCode !== null ? resolve() : proc.once('exit', resolve));
+    const fakeBrowser = (connected, close) => {
+        const proc = spawn('sleep', ['30']);
+        return { proc, browser: { connected, close, process: () => proc } };
+    };
+
+    const disconnected = fakeBrowser(false, async () => { throw new Error('close() must not be called when disconnected'); });
+    await closeBrowserHard(disconnected.browser);
+    await exited(disconnected.proc);
+    assert.strictEqual(disconnected.proc.signalCode, 'SIGKILL', 'a disconnected browser must be killed');
+
+    const hung = fakeBrowser(true, () => new Promise(() => {}));
+    await assert.rejects(closeBrowserHard(hung.browser, 50), /Browser close timeout/, 'a hung close still reports the timeout');
+    await exited(hung.proc);
+    assert.strictEqual(hung.proc.signalCode, 'SIGKILL', 'a hung browser must be killed after the timeout');
+
+    const clean = fakeBrowser(true, async () => { clean.proc.kill('SIGTERM'); await exited(clean.proc); });
+    await closeBrowserHard(clean.browser);
+    assert.strictEqual(clean.proc.signalCode, 'SIGTERM', 'a normal close is left alone');
+    await closeBrowserHard(null);
+
     console.log('scraper-core self-check passed');
 })();
