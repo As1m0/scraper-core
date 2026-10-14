@@ -211,7 +211,11 @@ class BaseScraper {
             return;
         }
 
-        proxyPool.quarantine(this.currentProxy, (msg) => this.log(`${msg} (${reason})`, 'WARN'));
+        // ponytail: block kind inferred from the reason text — every caller's bot-detection reason already
+        // says so ("cloudflare challenge detected…", "redirect loop", discovery's "CLOUDFLARE_CHALLENGE…").
+        // Pass it explicitly if a caller's wording ever drifts.
+        const blocked = /challenge|redirect/i.test(reason);
+        proxyPool.quarantine(this.currentProxy, (msg) => this.log(`${msg} (${reason})`, 'WARN'), { shopId: this.shopId, blocked });
 
         // Repos clear their own active-proxy field (activeProductProxy /
         // activeKeywordProxy) via this hook.
@@ -219,7 +223,7 @@ class BaseScraper {
     }
 
     getRandomProxy() {
-        return proxyPool.getRandomProxy(this.proxyList, (msg, level) => this.log(msg, level));
+        return proxyPool.getRandomProxy(this.proxyList, (msg, level) => this.log(msg, level), this.shopId);
     }
 
     getRandomUserAgent() {

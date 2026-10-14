@@ -9,9 +9,12 @@ const proxyPool = require('./proxyPool');
 // proxyQuarantine: save/load round trip (what seeds proxyPool's in-memory
 // list on the next process boot in the same directory)
 const tmpFile = path.join(os.tmpdir(), `proxy-quarantine-test-${process.pid}.json`);
-assert.deepStrictEqual(proxyQuarantine.load(tmpFile), [], 'load must return [] when the file does not exist');
-proxyQuarantine.save(['1.2.3.4'], tmpFile);
-assert.deepStrictEqual(proxyQuarantine.load(tmpFile), ['1.2.3.4'], 'load must return what save wrote');
+assert.strictEqual(proxyQuarantine.load(tmpFile).size, 0, 'load must return an empty Map when the file does not exist');
+const future = Date.now() + 60000;
+proxyQuarantine.save(new Map([['1.2.3.4', future], ['5|5.6.7.8', Date.now() - 1]]), tmpFile);
+assert.deepStrictEqual([...proxyQuarantine.load(tmpFile)], [['1.2.3.4', future]], 'load must return unexpired entries and drop expired ones');
+fs.writeFileSync(tmpFile, JSON.stringify(['1.2.3.4']));
+assert.strictEqual(proxyQuarantine.load(tmpFile).size, 0, 'a pre-TTL array file must be ignored, not trusted forever');
 fs.unlinkSync(tmpFile);
 
 // errorClassification
@@ -39,6 +42,33 @@ for (let i = 0; i < 10; i++) {
     assert.notStrictEqual(proxyPool.getRandomProxy(proxies), 'p1', 'quarantined proxy must not be selected');
 }
 
+// proxyPool: connection quarantine is global and expires; a bot block is scoped to its shop
+const realNow = Date.now;
+const at = (ms) => { Date.now = () => realNow() + ms; };
+proxyPool.quarantine('t1');
+assert.strictEqual(proxyPool.isFailed('t1', 5), true, 'a connection quarantine applies to every shop');
+at(16 * 60 * 1000);
+assert.strictEqual(proxyPool.isFailed('t1', 5), false, 'a connection quarantine must expire after ~15 min');
+Date.now = realNow;
+
+proxyPool.quarantine('b1', undefined, { shopId: 5, blocked: true });
+assert.strictEqual(proxyPool.isFailed('b1', 5), true, 'a bot block applies to the shop that blocked it');
+assert.strictEqual(proxyPool.isFailed('b1', 1), false, 'a bot block must not remove the proxy for other shops');
+at(5 * 60 * 60 * 1000);
+assert.strictEqual(proxyPool.isFailed('b1', 5), true, 'a bot block must outlast a run');
+at(6 * 60 * 60 * 1000 + 1);
+assert.strictEqual(proxyPool.isFailed('b1', 5), false, 'a bot block must expire after ~6 h');
+Date.now = realNow;
+
+// exhausting shop 5's pool resets only what blocks shop 5
+proxyPool.quarantine('x1', undefined, { shopId: 5, blocked: true });
+proxyPool.quarantine('x2', undefined, { shopId: 5, blocked: true });
+proxyPool.quarantine('x1', undefined, { shopId: 1, blocked: true });
+assert.ok(['x1', 'x2'].includes(proxyPool.getRandomProxy(['x1', 'x2'], undefined, 5)), 'an exhausted pool must reset for that shop');
+assert.strictEqual(proxyPool.isFailed('x1', 5), false);
+assert.strictEqual(proxyPool.isFailed('x1', 1), true, "resetting shop 5 must not clear shop 1's block");
+assert.strictEqual(proxyPool.getRandomProxy(['x1', 'x2'], undefined, 1), 'x2', 'shop 1 must still skip its blocked proxy');
+
 const lastUsed = proxyPool.getLastUsedProxy();
 assert.strictEqual(proxyPool.popLastUsed(), lastUsed, 'popLastUsed must return the most recently used proxy');
 
@@ -65,6 +95,13 @@ scraper.currentProxy = 'p9';
 scraper.quarantineCurrentProxy('test');
 assert.strictEqual(proxyPool.isFailed('p9'), true, 'quarantineCurrentProxy must quarantine the current proxy');
 assert.strictEqual(scraper.clearedProxy, 'p9', 'onProxyQuarantined hook must fire with the quarantined proxy');
+scraper.currentProxy = 'p10';
+scraper.quarantineCurrentProxy('cloudflare challenge detected: just a moment');
+assert.strictEqual(proxyPool.isFailed('p10', 1), true, 'a challenge quarantine must block the scraper\'s own shop');
+assert.strictEqual(proxyPool.isFailed('p10', 2), false, 'a challenge quarantine must not block other shops');
+scraper.currentProxy = 'p11';
+scraper.quarantineCurrentProxy('navigation/connection timeout');
+assert.strictEqual(proxyPool.isFailed('p11', 2), true, 'a timeout quarantine must stay global');
 scraper.requestStop('test stop');
 assert.throws(() => scraper.throwIfStopRequested(), /test stop/, 'throwIfStopRequested must throw the stop reason');
 
