@@ -2,7 +2,7 @@ const assert = require('assert');
 const os = require('os');
 const path = require('path');
 const fs = require('fs');
-const { isProxyError, shouldRestartBrowser } = require('./errorClassification');
+const { isProxyError, shouldRestartBrowser, isChildSpawnFailure } = require('./errorClassification');
 const proxyQuarantine = require('./proxyQuarantine');
 const proxyPool = require('./proxyPool');
 
@@ -17,6 +17,10 @@ fs.unlinkSync(tmpFile);
 // errorClassification
 assert.strictEqual(isProxyError(new Error('net::ERR_TUNNEL_CONNECTION_FAILED')), true);
 assert.strictEqual(isProxyError(new Error('Some unrelated failure')), false);
+assert.strictEqual(isChildSpawnFailure(Object.assign(new Error('spawn /tmp/chromium EAGAIN'), { code: 'EAGAIN', syscall: 'spawn /tmp/chromium' })), true,
+    'a Chromium that never started must not end the run');
+assert.strictEqual(isChildSpawnFailure(new TypeError('x is undefined')), false, 'real bugs stay fatal');
+assert.strictEqual(isChildSpawnFailure(Object.assign(new Error('read ECONNRESET'), { syscall: 'read' })), false);
 assert.strictEqual(isProxyError(new Error('Unknown stock status'), ['Unknown stock status']), true);
 assert.strictEqual(shouldRestartBrowser(new Error('Target closed')), true);
 assert.strictEqual(shouldRestartBrowser(new Error('fine')), false);

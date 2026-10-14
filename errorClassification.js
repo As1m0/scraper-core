@@ -44,4 +44,11 @@ function shouldRestartBrowser(err, extraPatterns = []) {
     return BROWSER_RESTART_PATTERNS.concat(extraPatterns).some(pattern => message.includes(pattern));
 }
 
-module.exports = { isProxyError, shouldRestartBrowser, PROXY_ERROR_PATTERNS, BROWSER_RESTART_PATTERNS };
+// A child process that never started (e.g. 'spawn /tmp/chromium EAGAIN' when the container is out of processes).
+// Puppeteer's pipe launch has already rejected ("Target closed") and dropped its listeners by the time this error
+// arrives, so it surfaces as uncaught; the scraper retries the launch, so it must not end the whole run.
+function isChildSpawnFailure(err) {
+    return typeof err?.syscall === 'string' && err.syscall.startsWith('spawn');
+}
+
+module.exports = { isProxyError, shouldRestartBrowser, isChildSpawnFailure, PROXY_ERROR_PATTERNS, BROWSER_RESTART_PATTERNS };

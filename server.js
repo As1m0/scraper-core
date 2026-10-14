@@ -3,6 +3,7 @@ const cors = require('cors');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const { isChildSpawnFailure } = require('./errorClassification');
 
 // Shared Express harness: auth, /health, /shutdown, the /run-scrapers log-streaming
 // route, and the runScrapers worker pool (run-mutex + per-task timeout enforcement,
@@ -69,6 +70,10 @@ function installProcessSafetyNet() {
         process.exit(1);
     });
     process.on('uncaughtException', (err) => {
+        if (isChildSpawnFailure(err)) {
+            console.log(`[WARN] Child process failed to start, continuing: ${err.message}`);
+            return;
+        }
         console.error('[FATAL] Uncaught exception:', err);
         process.exit(1);
     });
