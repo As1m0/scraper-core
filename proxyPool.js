@@ -7,6 +7,10 @@ const proxyQuarantine = require('./proxyQuarantine');
 // durations per shop are measured.
 const QUARANTINE_TTL_MS = Number(process.env.PROXY_QUARANTINE_TTL_MS) || 15 * 60 * 1000;
 const BLOCK_TTL_MS = Number(process.env.PROXY_BLOCK_TTL_MS) || 6 * 60 * 60 * 1000;
+// A second timeout on the same shop within this window (i.e. right after the first
+// quarantine expired) is that shop refusing the IP — Pelenka, and Alza by day, stall
+// instead of serving a block page — so it escalates to a shop-scoped block.
+const REPEAT_TIMEOUT_WINDOW_MS = 60 * 60 * 1000;
 
 // Module-level (not global.*) state: still shared across every caller in the
 // same process, since require() caches this module — same sharing behavior
@@ -16,6 +20,10 @@ const BLOCK_TTL_MS = Number(process.env.PROXY_BLOCK_TTL_MS) || 6 * 60 * 60 * 100
 // key (proxy, or "shopId|proxy" for a shop-scoped block) -> expiresAt ms
 let failedProxies = proxyQuarantine.load();
 let usedProxies = [];
+// "shopId|proxy" -> time of its last timeout quarantine.
+// ponytail: in memory only — repeats that matter happen within one run; persist it if
+// RESTART_APP ever restarts mid-run.
+const lastTimeoutAt = new Map();
 
 const blockKey = (shopId, proxy) => `${shopId}|${proxy}`;
 
@@ -86,19 +94,33 @@ function getRandomProxy(proxyList, log = () => {}, shopId) {
 }
 
 // blocked: the shop's bot detection rejected this IP (scoped to shopId when given).
+// A timeout with a shopId counts a strike only while the proxy is out of quarantine, so
+// one failure reported twice (or by two workers at once) never escalates itself.
 function quarantine(proxy, log = () => {}, { shopId, blocked = false } = {}) {
     if (!proxy) {
         return;
     }
-    const scoped = blocked && shopId != null;
+    let repeat = false;
+    if (!blocked) {
+        if (isFailed(proxy, shopId)) {
+            return;
+        }
+        if (shopId != null) {
+            const strikeKey = blockKey(shopId, proxy);
+            const previous = lastTimeoutAt.get(strikeKey);
+            repeat = previous !== undefined && Date.now() - previous <= REPEAT_TIMEOUT_WINDOW_MS;
+            lastTimeoutAt.set(strikeKey, Date.now());
+        }
+    }
+    const scoped = (blocked || repeat) && shopId != null;
     const key = scoped ? blockKey(shopId, proxy) : proxy;
     if (isActive(key)) {
         return;
     }
-    const ttl = blocked ? BLOCK_TTL_MS : QUARANTINE_TTL_MS;
+    const ttl = blocked || repeat ? BLOCK_TTL_MS : QUARANTINE_TTL_MS;
     failedProxies.set(key, Date.now() + ttl);
     proxyQuarantine.save(failedProxies);
-    log(`⛔ Quarantined proxy: ${proxy} for ${formatTtl(ttl)}${scoped ? ` on shop ${shopId}` : ''}`);
+    log(`⛔ Quarantined proxy: ${proxy} for ${formatTtl(ttl)}${scoped ? ` on shop ${shopId}` : ''}${repeat ? ' (repeat timeout)' : ''}`);
 }
 
 function getLastUsedProxy() {

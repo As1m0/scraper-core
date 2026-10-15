@@ -3,6 +3,8 @@ const os = require('os');
 const path = require('path');
 const fs = require('fs');
 const { isProxyError, shouldRestartBrowser, isChildSpawnFailure } = require('./errorClassification');
+// proxyPool seeds itself from the cwd file at require time; a previous run's file would leak into these asserts
+fs.rmSync(path.join(process.cwd(), 'proxy-quarantine.json'), { force: true });
 const proxyQuarantine = require('./proxyQuarantine');
 const proxyPool = require('./proxyPool');
 
@@ -68,6 +70,40 @@ assert.ok(['x1', 'x2'].includes(proxyPool.getRandomProxy(['x1', 'x2'], undefined
 assert.strictEqual(proxyPool.isFailed('x1', 5), false);
 assert.strictEqual(proxyPool.isFailed('x1', 1), true, "resetting shop 5 must not clear shop 1's block");
 assert.strictEqual(proxyPool.getRandomProxy(['x1', 'x2'], undefined, 1), 'x2', 'shop 1 must still skip its blocked proxy');
+
+// proxyPool: a repeat timeout on the same shop, after the first quarantine expired, is that shop refusing the IP
+const MIN = 60 * 1000;
+proxyPool.quarantine('r1', undefined, { shopId: 6 });
+assert.strictEqual(proxyPool.isFailed('r1', 1), true, 'a first timeout stays a 15 min global quarantine');
+at(20 * MIN);
+assert.strictEqual(proxyPool.isFailed('r1', 6), false);
+proxyPool.quarantine('r1', undefined, { shopId: 6 });
+assert.strictEqual(proxyPool.isFailed('r1', 6), true, 'a repeat timeout on the same shop must escalate');
+assert.strictEqual(proxyPool.isFailed('r1', 1), false, 'an escalated block applies to that shop only');
+at(20 * MIN + 5 * 60 * MIN);
+assert.strictEqual(proxyPool.isFailed('r1', 6), true, 'an escalated block must last ~6 h');
+Date.now = realNow;
+
+proxyPool.quarantine('r2', undefined, { shopId: 6 });
+proxyPool.quarantine('r2', undefined, { shopId: 6 });
+at(16 * MIN);
+assert.strictEqual(proxyPool.isFailed('r2', 6), false, 'one failure reported twice must not escalate');
+Date.now = realNow;
+
+proxyPool.quarantine('r3', undefined, { shopId: 6 });
+at(20 * MIN);
+proxyPool.quarantine('r3', undefined, { shopId: 1 });
+assert.strictEqual(proxyPool.isFailed('r3', 6), true, 'a timeout on another shop stays global');
+at(40 * MIN);
+assert.strictEqual(proxyPool.isFailed('r3', 6), false, 'timeouts on different shops must not escalate');
+Date.now = realNow;
+
+proxyPool.quarantine('r4', undefined, { shopId: 6 });
+at(61 * MIN);
+proxyPool.quarantine('r4', undefined, { shopId: 6 });
+at(61 * MIN + 16 * MIN);
+assert.strictEqual(proxyPool.isFailed('r4', 6), false, 'a repeat outside the 1 h window must not escalate');
+Date.now = realNow;
 
 const lastUsed = proxyPool.getLastUsedProxy();
 assert.strictEqual(proxyPool.popLastUsed(), lastUsed, 'popLastUsed must return the most recently used proxy');

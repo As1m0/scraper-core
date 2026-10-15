@@ -241,7 +241,7 @@ class BaseScraper {
         if (isProxyFail) {
             const lastProxy = proxyPool.getLastUsedProxy();
             if (lastProxy) {
-                proxyPool.quarantine(lastProxy, (msg) => this.log(`🚫 Marked proxy as failed: ${lastProxy}`));
+                proxyPool.quarantine(lastProxy, (msg) => this.log(`${msg} (proxy error)`, 'WARN'), { shopId: this.shopId });
             }
         }
 
