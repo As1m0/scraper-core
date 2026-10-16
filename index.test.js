@@ -90,12 +90,24 @@ at(16 * MIN);
 assert.strictEqual(proxyPool.isFailed('r2', 6), false, 'one failure reported twice must not escalate');
 Date.now = realNow;
 
+// ...and a repeat timeout on a different shop is the proxy itself being dead: 6 h, every shop
+const deadLogs = [];
 proxyPool.quarantine('r3', undefined, { shopId: 6 });
 at(20 * MIN);
-proxyPool.quarantine('r3', undefined, { shopId: 1 });
-assert.strictEqual(proxyPool.isFailed('r3', 6), true, 'a timeout on another shop stays global');
-at(40 * MIN);
-assert.strictEqual(proxyPool.isFailed('r3', 6), false, 'timeouts on different shops must not escalate');
+proxyPool.quarantine('r3', (m) => deadLogs.push(m), { shopId: 1 });
+at(20 * MIN + 5 * 60 * MIN);
+assert.strictEqual(proxyPool.isFailed('r3', 6), true, 'a proxy timing out on two shops must be out for ~6 h');
+assert.strictEqual(proxyPool.isFailed('r3', 2), true, 'a dead proxy must be out for every shop, not just the two it failed on');
+assert.ok(/for 6h \(timeouts on 2 shops/.test(deadLogs[0]), 'a dead-proxy quarantine must say so in the log');
+at(20 * MIN + 6 * 60 * MIN + 1);
+assert.strictEqual(proxyPool.isFailed('r3', 2), false, 'a dead-proxy quarantine must expire after ~6 h');
+Date.now = realNow;
+
+proxyPool.quarantine('r5', undefined, { shopId: 6 });
+at(61 * MIN);
+proxyPool.quarantine('r5', undefined, { shopId: 1 });
+at(61 * MIN + 16 * MIN);
+assert.strictEqual(proxyPool.isFailed('r5', 2), false, 'timeouts on two shops more than 1 h apart must not escalate');
 Date.now = realNow;
 
 proxyPool.quarantine('r4', undefined, { shopId: 6 });
