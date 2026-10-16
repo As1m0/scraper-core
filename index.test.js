@@ -189,6 +189,31 @@ assert.throws(() => scraper.throwIfStopRequested(), /test stop/, 'throwIfStopReq
     assert.strictEqual(getBaseApiUrl(), 'http://example.test/api', 'API_BASE_URL env must override the default');
     delete process.env.API_BASE_URL;
 
+    // listProxies: follows `next` across every page; PROXY_COUNTRIES becomes Webshare's country filter
+    const { listProxies } = require('./api');
+    const realFetch = globalThis.fetch;
+    const requested = [];
+    const json = (body) => new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } });
+    globalThis.fetch = async (url) => {
+        requested.push(String(url));
+        return String(url).includes('page=2')
+            ? json({ next: null, results: [{ proxy_address: '2.2.2.2', port: 2 }] })
+            : json({ next: 'https://proxy.webshare.io/api/v2/proxy/list/?mode=direct&page=2&page_size=100', results: [{ proxy_address: '1.1.1.1', port: 1 }] });
+    };
+    process.env.PROXY_COUNTRIES = 'HU, AT';
+    try {
+        const listed = await listProxies();
+        assert.deepStrictEqual(listed.map(p => p.proxy_address), ['1.1.1.1', '2.2.2.2'], 'listProxies must return every page, not just the first');
+        assert.ok(requested[0].includes('country_code__in=HU%2CAT'), 'PROXY_COUNTRIES must become the country_code__in filter');
+        delete process.env.PROXY_COUNTRIES;
+        requested.length = 0;
+        await listProxies();
+        assert.ok(!requested[0].includes('country_code__in'), 'no filter when PROXY_COUNTRIES is unset');
+    } finally {
+        globalThis.fetch = realFetch;
+        delete process.env.PROXY_COUNTRIES;
+    }
+
     // openBrowserWithRecovery: retries the initial launch, quarantines on
     // timeout-like/proxy failures, falls back to no-proxy on the final attempt
     class RecoveryTestScraper extends BaseScraper {
