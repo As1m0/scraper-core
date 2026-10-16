@@ -29,4 +29,16 @@ const USER_AGENTS = [
   "Mozilla/5.0 (Linux; Android 11; SM-A125M) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.5790.170 Mobile Safari/537.36",
 ];
 
-module.exports = { USER_AGENTS };
+// Short "family+major/OS" label for logs, e.g. "Chrome121/Win", "Safari17/Mac", so block
+// rates can be compared per UA family. Order matters: Edge/Opera UAs also say Chrome,
+// Android ones also say Linux, iOS ones also say Mac OS X.
+const FAMILIES = [['Edge', /Edg\/(\d+)/], ['Opera', /OPR\/(\d+)/], ['Firefox', /Firefox\/(\d+)/], ['Chrome', /Chrome\/(\d+)/], ['Safari', /Version\/(\d+).*Safari/]];
+const OSES = [['Android', /Android/], ['iOS', /iPhone|iPad/], ['Win', /Windows/], ['Mac', /Mac OS X/], ['Linux', /Linux/]];
+
+function uaLabel(ua = '') {
+    const family = FAMILIES.map(([name, re]) => [name, ua.match(re)]).find(([, m]) => m);
+    const os = (OSES.find(([, re]) => re.test(ua)) || ['?'])[0];
+    return `${family ? family[0] + family[1][1] : 'Other'}/${os}`;
+}
+
+module.exports = { USER_AGENTS, uaLabel };

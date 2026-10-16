@@ -1,5 +1,5 @@
 const fs = require('fs');
-const { USER_AGENTS } = require('./userAgents');
+const { USER_AGENTS, uaLabel } = require('./userAgents');
 const proxyPool = require('./proxyPool');
 const { isProxyError, shouldRestartBrowser } = require('./errorClassification');
 const api = require('./api');
@@ -215,7 +215,7 @@ class BaseScraper {
         // says so ("cloudflare challenge detected…", "redirect loop", discovery's "CLOUDFLARE_CHALLENGE…").
         // Pass it explicitly if a caller's wording ever drifts.
         const blocked = /challenge|redirect/i.test(reason);
-        proxyPool.quarantine(this.currentProxy, (msg) => this.log(`${msg} (${reason})`, 'WARN'), { shopId: this.shopId, blocked });
+        proxyPool.quarantine(this.currentProxy, (msg) => this.log(`${msg} (${reason})${this.uaSuffix(reason)}`, 'WARN'), { shopId: this.shopId, blocked });
 
         // Repos clear their own active-proxy field (activeProductProxy /
         // activeKeywordProxy) via this hook.
@@ -230,6 +230,24 @@ class BaseScraper {
         return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
     }
 
+    // Picks the UA for a new browser session and logs one line per session: the
+    // denominator for per-UA block rates (blocks ÷ sessions), with the proxy's
+    // country so a bad IP range isn't mistaken for a bad UA.
+    pickUserAgent() {
+        const userAgent = this.getRandomUserAgent();
+        this.userAgentLabel = uaLabel(userAgent);
+        const proxy = this.useProxy ? this.currentProxy : null;
+        const country = proxy && this.proxies?.find(p => `${p.proxy_address}:${p.port}` === proxy)?.country_code;
+        this.log(`🧭 Session: shop ${this.shopId}, proxy ${proxy || 'none'}${country ? ` (${country})` : ''}, UA ${this.userAgentLabel}`);
+        return userAgent;
+    }
+
+    // " [UA Chrome121/Win]" for quarantine log lines. Left off launch failures: the
+    // browser never loaded a page, and the label would still be the previous session's.
+    uaSuffix(reason = '') {
+        return this.userAgentLabel && !/launch/i.test(reason) ? ` [UA ${this.userAgentLabel}]` : '';
+    }
+
     getRandomWaitTime(min = this.minWaitMs, max = this.maxWaitMs) {
         return Math.floor(Math.random() * (max - min + 1)) + min;
     }
@@ -241,7 +259,7 @@ class BaseScraper {
         if (isProxyFail) {
             const lastProxy = proxyPool.getLastUsedProxy();
             if (lastProxy) {
-                proxyPool.quarantine(lastProxy, (msg) => this.log(`${msg} (proxy error)`, 'WARN'), { shopId: this.shopId });
+                proxyPool.quarantine(lastProxy, (msg) => this.log(`${msg} (proxy error)${this.uaSuffix()}`, 'WARN'), { shopId: this.shopId });
             }
         }
 
@@ -344,7 +362,7 @@ class BaseScraper {
 
         await page.emulateTimezone('Europe/Budapest');
 
-        const userAgent = this.getRandomUserAgent();
+        const userAgent = this.pickUserAgent();
         await page.setUserAgent(userAgent);
         await page.setViewport({
             width: 1200 + Math.floor(Math.random() * 200),

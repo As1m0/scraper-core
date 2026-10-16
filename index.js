@@ -1,4 +1,4 @@
-const { USER_AGENTS } = require('./userAgents');
+const { USER_AGENTS, uaLabel } = require('./userAgents');
 const proxyQuarantine = require('./proxyQuarantine');
 const proxyPool = require('./proxyPool');
 const { isProxyError, shouldRestartBrowser, PROXY_ERROR_PATTERNS, BROWSER_RESTART_PATTERNS } = require('./errorClassification');
@@ -17,6 +17,7 @@ module.exports = {
     listProxies,
     sendScrapeSummary,
     USER_AGENTS,
+    uaLabel,
     proxyQuarantine,
     proxyPool,
     isProxyError,

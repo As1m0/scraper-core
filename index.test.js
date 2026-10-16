@@ -150,6 +150,25 @@ assert.strictEqual(proxyPool.isFailed('p10', 2), false, 'a challenge quarantine 
 scraper.currentProxy = 'p11';
 scraper.quarantineCurrentProxy('navigation/connection timeout');
 assert.strictEqual(proxyPool.isFailed('p11', 2), true, 'a timeout quarantine must stay global');
+// UA label: one session line per browser (with proxy country), and the label on quarantine lines
+const { uaLabel } = require('./userAgents');
+assert.strictEqual(uaLabel('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36 Edg/121.0.0.0'), 'Edge121/Win', 'Edge UAs also say Chrome; Edge must win');
+assert.strictEqual(uaLabel('Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1'), 'Safari17/iOS', 'iOS UAs also say Mac OS X; iOS must win');
+assert.strictEqual(uaLabel('Mozilla/5.0 (Linux; Android 11; SM-A125M) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.5790.170 Mobile Safari/537.36'), 'Chrome115/Android', 'Android UAs also say Linux; Android must win');
+assert.strictEqual(uaLabel('Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:121.0) Gecko/20100101 Firefox/121.0'), 'Firefox121/Mac');
+scraper.proxies = [{ proxy_address: '9.9.9.9', port: 1, country_code: 'HU' }];
+scraper.currentProxy = '9.9.9.9:1';
+logs.length = 0;
+const pickedUa = scraper.pickUserAgent();
+assert.ok(require('./userAgents').USER_AGENTS.includes(pickedUa), 'pickUserAgent must return a pooled UA');
+assert.strictEqual(logs[0], `🧭 Session: shop 1, proxy 9.9.9.9:1 (HU), UA ${uaLabel(pickedUa)}`, 'one session line with shop, proxy, country and UA label');
+scraper.currentProxy = 'p12';
+scraper.quarantineCurrentProxy('cloudflare challenge detected: cloudflare');
+assert.ok(logs.some(m => m.includes('p12') && m.endsWith(`[UA ${uaLabel(pickedUa)}]`)), 'a quarantine line must carry the session UA label');
+scraper.currentProxy = 'p13';
+scraper.quarantineCurrentProxy('browser launch timeout');
+assert.ok(logs.some(m => m.includes('p13') && !m.includes('[UA')), 'a launch failure must not carry a stale UA label');
+
 scraper.requestStop('test stop');
 assert.throws(() => scraper.throwIfStopRequested(), /test stop/, 'throwIfStopRequested must throw the stop reason');
 
